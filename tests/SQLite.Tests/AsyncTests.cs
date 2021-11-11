@@ -1585,5 +1585,34 @@ namespace SQLite.Tests
 
 			Assert.IsNull (thingReturned);
 		}
+
+		[Test]
+		public async Task TransactionsDontExposeStateInTheSameAsyncConnection ()
+		{
+			using var env = new TestEnvironment ();
+
+			var thingToInsert = new StateThingy { Id = 1, Name = "hello" };
+
+			var connection = new SQLiteAsyncConnection (env.ConnectionString);
+			await connection.CreateTableAsync<StateThingy> ();
+
+			StateThingy thingReturned = null;
+
+			async Task Task1 () =>
+				await connection.RunInTransactionAsync (conn => {
+					conn.Insert (thingToInsert);
+					Thread.Sleep (2000);
+				});
+
+			async Task Task2 ()
+			{
+				Thread.Sleep (500);
+				thingReturned = await connection.FindAsync<StateThingy> (thingToInsert.Id);
+			}
+
+			await Task.WhenAll (Task.Run(Task1), Task.Run(Task2));
+
+			Assert.IsNull (thingReturned);
+		}
 	}
 }
