@@ -89,7 +89,7 @@ namespace SQLite.Tests
 
 				Connection = new SQLiteAsyncConnection(ConnectionString);
 			}
-			
+
 			#region IDisposable Support
 			private bool alreadyDisposed = false; // To detect redundant calls
 
@@ -907,7 +907,7 @@ namespace SQLite.Tests
 				task.Wait();
 				object name = task.Result;
 				Assert.AreNotEqual("Customer", name);
-				//delete 
+				//delete
 				conn.DeleteAllAsync<Customer>().Wait();
 				// check...
 				var nodatatask = conn.ExecuteScalarAsync<int>("select Max(Id) from customer where FirstName='hfiueyf8374fhi'");
@@ -1516,5 +1516,74 @@ namespace SQLite.Tests
 			}
 		}
 
+		private class StateThingy
+		{
+			[PrimaryKey, AutoIncrement]
+			public int Id { get; set; }
+			public string Name { get; set; }
+
+			public override bool Equals (object? obj)
+			{
+				if (!(obj is StateThingy other)) return false;
+
+				return other.Id == Id && other.Name.Equals (Name);
+			}
+		}
+
+		[Test]
+		public async Task TransactionsDontExposeStateAcrossDifferentConnections ()
+		{
+			using var env = new TestEnvironment ();
+
+			var connection = new SQLiteAsyncConnection (env.ConnectionString);
+			await connection.CreateTableAsync<StateThingy> ();
+
+			var thingToInsert = new StateThingy { Id = 1, Name = "hello" };
+
+			var otherConnection = new SQLiteConnection (env.ConnectionString);
+			await connection.RunInTransactionAsync (conn => {
+				conn.Insert (thingToInsert);
+
+				var existsInTransaction = conn.Find<StateThingy> (thingToInsert.Id);
+				Assert.AreEqual (existsInTransaction, thingToInsert);
+
+				var shouldNotBeFoundElsewhere = otherConnection.Find<StateThingy> (thingToInsert.Id);
+				Assert.IsNull (shouldNotBeFoundElsewhere);
+			});
+
+			var shouldBeFoundAfterCommit = otherConnection.Find<StateThingy> (thingToInsert.Id);
+			Assert.AreEqual(shouldBeFoundAfterCommit, thingToInsert);
+		}
+
+		[Test]
+		public async Task TransactionsDontExposeStateAcrossDifferentAsyncConnections ()
+		{
+			using var env = new TestEnvironment ();
+
+			var thingToInsert = new StateThingy { Id = 1, Name = "hello" };
+
+			var connection = new SQLiteAsyncConnection (env.ConnectionString);
+			var otherConnection = new SQLiteAsyncConnection (env.ConnectionString);
+
+			await connection.CreateTableAsync<StateThingy> ();
+
+			StateThingy thingReturned = null;
+
+			async Task Task1 () =>
+				await connection.RunInTransactionAsync (conn => {
+					conn.Insert (thingToInsert);
+					Thread.Sleep (2000);
+				});
+
+			async Task Task2 ()
+			{
+				Thread.Sleep (500);
+				thingReturned = await otherConnection.FindAsync<StateThingy> (thingToInsert.Id);
+			}
+
+			await Task.WhenAll (Task.Run(Task1), Task.Run(Task2));
+
+			Assert.IsNull (thingReturned);
+		}
 	}
 }
